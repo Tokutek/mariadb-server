@@ -1210,6 +1210,7 @@ a
 include/stop_slave.inc
 SET GLOBAL debug_dbug=@old_dbug;
 SET GLOBAL slave_parallel_threads=10;
+include/start_slave.inc
 *** MDEV-6676 - test syntax of @@slave_parallel_mode ***
 Parallel_Mode = 'conservative'
 include/stop_slave.inc

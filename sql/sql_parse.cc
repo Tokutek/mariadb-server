@@ -2491,7 +2491,7 @@ mysql_execute_command(THD *thd)
           according to slave filtering rules.
           Returning success without producing any errors in this case.
         */
-        if (!thd->lex->check_exists)
+        if (!thd->lex->create_info.if_exists())
           DBUG_RETURN(0);
         /*
           DROP TRIGGER IF NOT EXISTS will return without an error later
