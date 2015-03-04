@@ -1,5 +1,5 @@
-/* Copyright (c) 2000, 2013 Oracle and/or its affiliates.
-   Copyright (c) 2009, 2013 Monty Program Ab.
+/* Copyright (c) 2000, 2014 Oracle and/or its affiliates.
+   Copyright (c) 2009, 2015 MariaDB
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -4983,7 +4983,18 @@ add_key_part(DYNAMIC_ARRAY *keyuse_array, KEY_FIELD *key_field)
 }
 
 
-#define FT_KEYPART   (MAX_REF_PARTS+10)
+/*
+  A key part number that means we're using a fulltext scan.
+  
+  In order not to confuse it with regular equalities, we need to pick
+  a number that's greater than MAX_REF_PARTS.
+
+  Hash Join code stores field->field_index in KEYUSE::keypart, so the 
+  number needs to be bigger than MAX_FIELDS, also.
+
+  CAUTION: sql_test.cc has its own definition of FT_KEYPART.
+*/
+#define FT_KEYPART   (MAX_FIELDS+10)
 
 static bool
 add_ft_keys(DYNAMIC_ARRAY *keyuse_array,
@@ -7477,8 +7488,12 @@ double table_cond_selectivity(JOIN *join, uint idx, JOIN_TAB *s,
             else
               fldno= table->key_info[key].key_part[keyparts-1].fieldnr - 1;
             if (keyuse->val->const_item())
-            {              
-              sel /= table->field[fldno]->cond_selectivity;
+            { 
+              if (table->field[fldno]->cond_selectivity > 0)
+	      {            
+                sel /= table->field[fldno]->cond_selectivity;
+                set_if_smaller(sel, 1.0);
+              }
               /* 
                TODO: we could do better here:
                  1. cond_selectivity might be =1 (the default) because quick 
@@ -7532,7 +7547,10 @@ double table_cond_selectivity(JOIN *join, uint idx, JOIN_TAB *s,
         if (!(next_field->table->map & rem_tables) && next_field->table != table)
         { 
           if (field->cond_selectivity > 0)
+	  {
             sel/= field->cond_selectivity;
+            set_if_smaller(sel, 1.0);
+          }
           break;
         }
       }
@@ -15878,7 +15896,6 @@ create_tmp_table(THD *thd, TMP_TABLE_PARAM *param, List<Item> &fields,
               (int) distinct, (int) save_sum_fields,
               (ulong) rows_limit, MY_TEST(group)));
 
-  thd->inc_status_created_tmp_tables();
   thd->query_plan_flags|= QPLAN_TMP_TABLE;
 
   if (use_temp_pool && !(test_flags & TEST_KEEP_TMP_TABLES))
@@ -16833,14 +16850,19 @@ bool open_tmp_table(TABLE *table)
                                    HA_OPEN_TMP_TABLE |
                                    HA_OPEN_INTERNAL_TABLE)))
   {
-    table->file->print_error(error,MYF(0)); /* purecov: inspected */
-    table->db_stat=0;
-    return(1);
+    table->file->print_error(error, MYF(0)); /* purecov: inspected */
+    table->db_stat= 0;
+    return 1;
   }
   table->db_stat= HA_OPEN_KEYFILE+HA_OPEN_RNDFILE;
-  (void) table->file->extra(HA_EXTRA_QUICK);		/* Faster */
-  table->created= TRUE;
-  return(0);
+  (void) table->file->extra(HA_EXTRA_QUICK); /* Faster */
+  if (!table->created)
+  {
+    table->created= TRUE;
+    table->in_use->inc_status_created_tmp_tables();
+  }
+
+  return 0;
 }
 
 
@@ -17040,8 +17062,10 @@ bool create_internal_tmp_table(TABLE *table, KEY *keyinfo,
   }
 
   table->in_use->inc_status_created_tmp_disk_tables();
+  table->in_use->inc_status_created_tmp_tables();
   table->in_use->query_plan_flags|= QPLAN_TMP_DISK;
   share->db_record_offset= 1;
+  table->created= TRUE;
   DBUG_RETURN(0);
  err:
   DBUG_RETURN(1);
@@ -17186,6 +17210,7 @@ bool create_internal_tmp_table(TABLE *table, KEY *keyinfo,
     goto err;
   }
   table->in_use->inc_status_created_tmp_disk_tables();
+  table->in_use->inc_status_created_tmp_tables();
   table->in_use->query_plan_flags|= QPLAN_TMP_DISK;
   share->db_record_offset= 1;
   table->created= TRUE;
